@@ -142,16 +142,33 @@ npx wrangler deploy
 ```
 Worker 域名形如 `https://novel-shop-api.<账号>.workers.dev`。前端 Pages 推荐走第二节的原生 Git 集成（push 自动部署，输出目录 `frontend`）；若临时手动上传，可执行 `cd frontend && npx wrangler pages deploy . --project-name=<你的项目名>`（确保 `config.js` 的 `API_BASE` 已指向上面的 Worker 域名）。
 
-## 四、配置易支付回调
+## 四、配置易支付（V1 · mapi.php）
 
-登录易支付商户后台，把回调地址设为（替换成你的 Worker 域名）：
-```
-异步通知 notify_url：https://novel-shop-api.<账号>.workers.dev/api/pay/notify
-同步跳转 return_url：https://novel-shop-api.<账号>.workers.dev/api/pay/return
-```
-签名方式选 **MD5**，与 `wrangler.toml` 的 `PAY_CHANNEL = "epay"` 对应。
+### 1. 商户后台设置
+- **签名方式**：选 **MD5**（即兼容模式 / V1 MD5，不要选「仅 RSA」）。
+- **接口地址（API 提交地址）**：填 V1 的 `mapi.php` 完整地址，如 `https://epay.weixlf.com/mapi.php` —— 这是服务端 POST 调用、返回 JSON 的接口。
+  - 代码会自动识别：URL 含 `mapi.php` → 走 POST+JSON 模式；否则按旧版 `submit.php` 的 GET 跳转处理。**推荐用 mapi.php**。
+- 回调地址无需在后台手填：下单时代码会自动把 `notify_url` / `return_url` 传给平台。它们指向：
+  ```
+  异步通知 notify_url：https://novel-shop-api.<账号>.workers.dev/api/pay/notify
+  同步跳转 return_url：https://novel-shop-api.<账号>.workers.dev/api/pay/return
+  ```
 
-> 同步跳转（return_url）走 Worker 的 `/api/pay/return`，为避免支付后停留在 Worker 域名，请在 `wrangler.toml` 的 `FRONTEND_URL` 填入前端 Pages 域名（如 `https://novel-shop.pages.dev`），用户付款后会自动跳回前端订单页。
+### 2. GitHub Secrets（三必填之外，支付相关）
+| Secret | 值 | 说明 |
+|---|---|---|
+| `EPAY_PID` | 商户 ID（如 `86957`） | 后台「商户ID」 |
+| `EPAY_KEY` | V1 的 MD5 密钥（32 位） | 后台「MD5密钥」，**不是 RSA 密钥** |
+| `EPAY_API_URL` | `https://epay.weixlf.com/mapi.php` | V1 接口地址，以文档「URL地址」为准 |
+
+### 3. 协议适配说明（代码已实现，符合 V1 官方文档）
+- 提交参数含官方必填的 `pid` / `type` / `out_trade_no` / `notify_url` / `name` / `money` / `clientip` / `sign` / `sign_type`。
+- **支付方式映射**：前端「微信支付→`wxpay`」「QQ钱包→`qqpay`」「支付宝→`alipay`」，与官方 `type` 取值一致。
+- 签名：参数按名升序、排除 `sign`/`sign_type`/空值，拼 `k=v&k=v` 后接商户密钥做 MD5（小写），与官方 MD5 算法逐条对应。
+- 回调验签：校验 sign + 仅认 `trade_status=TRADE_SUCCESS` + 金额校验 + 幂等（重复通知不重复发货）。
+- 下单取平台返回 JSON 的 `payurl` 供浏览器跳转（若某支付方式只返回 `qrcode`，需在后台改用能返回 payurl 的通道）。
+
+> 同步跳转（return_url）走 Worker 的 `/api/pay/return`，付款后自动跳回前端订单页——前提是 `wrangler.toml` 的 `FRONTEND_URL` 已填前端 Pages 域名（当前已写死为 `https://cf-3i9.pages.dev`，如需改域名直接改该文件）。
 
 ## 五、添加小说
 

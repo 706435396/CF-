@@ -172,8 +172,17 @@ async function createOrder(request, env) {
 
   const adapter = getAdapter(channel);
   // 收银台商品名也用中性文案，避免在支付平台泄露内容身份
+  const clientIp = request.headers.get('CF-Connecting-IP')
+    || request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim()
+    || '127.0.0.1';
   const { payUrl } = await adapter.createPayment(
-    { order_no: no, amount: product.price, product_title: `私密档案 ${publicCode(product.id)}` },
+    {
+      order_no: no,
+      amount: product.price,
+      product_title: `私密档案 ${publicCode(product.id)}`,
+      pay_type,
+      client_ip: clientIp,
+    },
     env,
     { notifyBase: new URL(request.url).origin }
   );
