@@ -24,8 +24,9 @@ export async function fulfillOrder(env, order, product, request) {
   // 1) 网盘 / 直链
   let downloadUrl = product.drive_url || '';
   if (!downloadUrl && product.r2_key && env.FILES) {
-    // R2 对象：优先返回公开绑定域名，否则返回 API 下载路径
-    downloadUrl = `${origin}/api/file/${encodeURIComponent(product.r2_key)}`;
+    // R2 对象：下载链接带令牌鉴权（一单一码），防绕过付款直链下载
+    const tk = order.read_token ? `?token=${encodeURIComponent(order.read_token)}` : '';
+    downloadUrl = `${origin}/api/file/${encodeURIComponent(product.r2_key)}${tk}`;
   }
   if (want('link')) {
     results.push({ method: 'link', content: downloadUrl || '（未配置下载链接）' });

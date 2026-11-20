@@ -93,11 +93,12 @@ async function route(request, env, ctx) {
     return readContent(decodeURIComponent(path.split('/')[3]), env);
   }
   if (path.startsWith('/api/file/') && method === 'GET') {
-    return serveFile(decodeURIComponent(path.split('/')[3]), env);
+    return serveFile(decodeURIComponent(path.split('/')[3]), url, env);
   }
 
   // ---------- 后台接口 ----------
   if (path === '/api/admin/login' && method === 'POST') return adminLogin(request, env);
+  if (path === '/api/admin/upload' && method === 'POST') return adminUpload(request, env);
   if (path.startsWith('/api/admin/')) return adminRoutes(request, env, path, method);
 
   if (path === '/') return json({ ok: true, name: 'Vault API', version: '1.0' });
@@ -212,9 +213,12 @@ async function payNotify(request, env) {
   // 金额校验
   if (verified.amount && verified.amount !== order.amount) return html('fail');
 
+  // 一单一码：付款即生成访问令牌，供「在线阅读」与「R2 下载」共用。
+  // 即使发货方式只有 link，也有令牌，下载接口据此鉴权。
+  const accessToken = order.read_token || genToken();
   await env.DB.prepare(
-    "UPDATE orders SET status='paid', trade_no=?, paid_at=? WHERE order_no=?"
-  ).bind(verified.tradeNo || '', now(), order.order_no).run();
+    "UPDATE orders SET status='paid', trade_no=?, paid_at=?, read_token=? WHERE order_no=?"
+  ).bind(verified.tradeNo || '', now(), accessToken, order.order_no).run();
 
   await env.DB.prepare('UPDATE products SET sales=sales+1 WHERE id=?').bind(order.product_id).run();
 
@@ -272,13 +276,22 @@ async function queryOrder(no, request, env) {
       'SELECT drive_url,r2_key,title,author,file_format FROM products WHERE id=?'
     ).bind(order.product_id).first();
     const origin = new URL(request.url).origin;
+    // 兼容历史订单：早期已支付的订单可能没令牌，现场补一个并落库
+    let accessToken = order.read_token;
+    if (!accessToken) {
+      accessToken = genToken();
+      await env.DB.prepare('UPDATE orders SET read_token=? WHERE order_no=?').bind(accessToken, order.order_no).run();
+    }
     let downloadUrl = product?.drive_url || '';
-    if (!downloadUrl && product?.r2_key && env.FILES) downloadUrl = `${origin}/api/file/${encodeURIComponent(product.r2_key)}`;
+    // R2 文件走鉴权接口，必须带令牌；网盘直链保持原样（平台自带校验）
+    if (!downloadUrl && product?.r2_key && env.FILES) {
+      downloadUrl = `${origin}/api/file/${encodeURIComponent(product.r2_key)}?token=${encodeURIComponent(accessToken)}`;
+    }
     result.product_title = product?.title || '私密档案';
     result.author = product?.author || '';
     result.file_format = product?.file_format || '';
     result.download_url = downloadUrl;
-    result.read_url = order.read_token ? `${origin}/read.html?token=${order.read_token}` : '';
+    result.read_url = `${origin}/read.html?token=${encodeURIComponent(accessToken)}`;
   }
   return json({ ok: true, order: result });
 }
@@ -298,9 +311,20 @@ async function readContent(token, env) {
   return json({ ok: true, title: product.title, author: product.author, content: content || '（正文暂未录入）' });
 }
 
-/* ================= R2 文件 ================= */
-async function serveFile(key, env) {
+/* ================= R2 文件（令牌鉴权） ================= */
+async function serveFile(key, url, env) {
   if (!env.FILES) return json({ ok: false, error: '未配置文件存储' }, 404);
+  const token = (url.searchParams.get('token') || '').trim();
+  if (!token) return json({ ok: false, error: '缺少访问令牌' }, 403);
+  // 令牌必须对应一个已支付订单，且该订单的商品确实绑定了这个 key（防越权下载别人的文件）
+  const order = await env.DB.prepare(
+    "SELECT product_id FROM orders WHERE read_token=? AND status='paid'"
+  ).bind(token).first();
+  if (!order) return json({ ok: false, error: '令牌无效或订单未支付' }, 403);
+  const product = await env.DB.prepare('SELECT r2_key FROM products WHERE id=?').bind(order.product_id).first();
+  if (!product || !product.r2_key || product.r2_key !== key) {
+    return json({ ok: false, error: '令牌与该文件不匹配' }, 403);
+  }
   const obj = await env.FILES.get(key);
   if (!obj) return json({ ok: false, error: '文件不存在' }, 404);
   const ext = key.split('.').pop().toLowerCase();
@@ -309,8 +333,54 @@ async function serveFile(key, env) {
     headers: {
       'Content-Type': (types[ext] || 'application/octet-stream') + '; charset=utf-8',
       'Content-Disposition': `attachment; filename="${encodeURIComponent(key.split('/').pop())}"`,
+      'Cache-Control': 'private, no-store',
     },
   });
+}
+
+/* ================= 后台：上传文件到 R2（管理员鉴权） ================= */
+const UPLOAD_TYPES = {
+  txt: 'text/plain', md: 'text/markdown', epub: 'application/epub+zip', pdf: 'application/pdf',
+};
+const UPLOAD_MAX_BYTES = 100 * 1024 * 1024; // Worker 请求体上限约 100MB
+
+async function adminUpload(request, env) {
+  if (!(await isAdmin(request, env))) return json({ ok: false, error: '未授权' }, 401);
+  if (!env.FILES) return json({ ok: false, error: '未配置文件存储' }, 404);
+
+  let fileName = '', bytes;
+  const contentType = request.headers.get('Content-Type') || '';
+  if (contentType.includes('multipart/form-data')) {
+    // 浏览器表单上传
+    const form = await request.formData().catch(() => null);
+    const file = form?.get('file');
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      return json({ ok: false, error: '缺少文件字段 file' }, 400);
+    }
+    fileName = file.name || 'upload.bin';
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } else {
+    // 原始二进制：文件名从 ?name= 传入
+    fileName = new URL(request.url).searchParams.get('name') || 'upload.bin';
+    bytes = new Uint8Array(await request.arrayBuffer());
+  }
+
+  const ext = (fileName.split('.').pop() || '').toLowerCase();
+  if (!UPLOAD_TYPES[ext]) {
+    return json({ ok: false, error: '仅支持 txt/md/epub/pdf 格式' }, 400);
+  }
+  if (!bytes.byteLength) return json({ ok: false, error: '文件为空' }, 400);
+  if (bytes.byteLength > UPLOAD_MAX_BYTES) {
+    return json({ ok: false, error: '文件超过 100MB 限制' }, 413);
+  }
+
+  // 随机 key：不可猜、无中文/特殊字符，扩展名保留
+  const rand = genToken().slice(0, 24);
+  const key = `files/${rand}.${ext}`;
+  await env.FILES.put(key, bytes, {
+    httpMetadata: { contentType: UPLOAD_TYPES[ext] },
+  });
+  return json({ ok: true, key, size: bytes.byteLength, ext });
 }
 
 /* ================= 后台鉴权与管理（登录后返回完整字段） ================= */

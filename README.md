@@ -36,9 +36,9 @@
 CR自动发货/
 ├─ db/schema.sql              D1 表结构
 ├─ worker/                    后端 Worker（ Wrangler 部署）
-│  ├─ wrangler.toml
+│  ├─ wrangler.toml             D1 + R2（已启用，桶 cr-commodity）绑定
 │  └─ src/
-│     ├─ index.js             入口与全部路由
+│     ├─ index.js             入口与全部路由（含上传接口、令牌鉴权下载）
 │     ├─ pay/epay.js          易支付适配器（签名/验签，可插拔）
 │     ├─ pay/index.js         支付通道注册表
 │     └─ delivery/index.js    发货编排（link/read/email）
@@ -183,6 +183,25 @@ python bulk_import.py --api https://novel-shop-api.<账号>.workers.dev \
 ```
 > 短篇可把正文写进数据库实现“在线阅读”；长篇建议用网盘链接发货，正文留空即可。
 > 读取 epub 正文需 `pip install ebooklib`。
+
+### 方式 C：后台网页上传文件到 R2（推荐，含鉴权）
+
+R2 桶 `cr-commodity` 已通过 `wrangler.toml` 的 `[[r2_buckets]]` 绑定为 `FILES`。在 `admin.html` 的“添加商品”里可直接选文件上传：
+
+1. 打开 `/admin.html` → 添加商品 → 「上传文件到 R2」选文件（txt/md/epub/pdf，≤100MB）→ 点「上传到 R2」。
+2. 上传成功后**随机 key 自动填入**「R2 文件 key」（形如 `files/a1b2c3....txt`，不可猜、不含中文）。
+3. 填书名/价格 → 保存商品。买家付款后即拿到带令牌的下载链接。
+
+底层是 `POST /api/admin/upload`（后台登录 token 鉴权），用随机串生成 key 写入 R2。也可用命令行直传：
+```bash
+npx wrangler r2 object put cr-commodity/files/自定义.txt --file=./本地.txt
+```
+
+**下载鉴权（重要）**：`/api/file/:key` 不再公开。下载链接形如 `/api/file/files/xxx.txt?token=<32位令牌>`，令牌在**付款时一单一码生成**，且服务端校验「令牌属于已支付订单 + 该订单商品确实绑定这个 key」，双重防越权。无令牌/未支付/文件不匹配一律 403。因此：
+- 桶**不要**开启 `r2.dev` 公有域名，所有访问走 Worker 鉴权接口；
+- 别把带 token 的链接到处转发（等同一次性凭证，虽未设过期但绑定订单）。
+
+**存储压缩说明**：正文（`content` 字段）当前为明文存储，HTTP 传输由 Cloudflare 自动 gzip/Brotli 压缩；数据库内的存储压缩（如 gzip 后 base64）尚未实现。大文件建议走 R2/网盘而非塞进 `content`。
 
 ## 六、支付与发货流程说明
 
