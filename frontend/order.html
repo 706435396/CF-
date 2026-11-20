@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>解锁记录 · VAULT 密匣</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="nav-inner">
+    <a class="logo" href="index.html">
+      <span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#0a0c14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+      <span class="logo-en">VAULT</span><span class="logo-cn">密匣</span>
+    </a>
+    <nav class="nav-links">
+      <a href="index.html">档案馆</a>
+      <a href="order.html">解锁记录</a>
+      <a href="admin.html" class="admin">管理</a>
+    </nav>
+  </div>
+</header>
+
+<main class="container">
+  <div class="panel">
+    <h2>🔍 查询解锁记录</h2>
+    <p class="panel-lead">输入订单号查询状态。验证通过后，此处将揭示档案详情与获取方式。</p>
+    <div class="field">
+      <label>订单号</label>
+      <input id="orderNo" placeholder="例如 NV2026010112000012345">
+    </div>
+    <button class="btn btn-block" onclick="query()">查询订单</button>
+    <div class="err" id="err"></div>
+    <div id="result"></div>
+    <p class="hint" style="text-align:center;margin-top:20px">订单号在支付完成后显示；付款跳转页的地址栏 ?order_no= 也会自动填入。</p>
+  </div>
+</main>
+
+<footer><span class="foot-brand">VAULT</span> · 私密内容自动解锁系统 · Powered by Cloudflare</footer>
+
+<script src="assets/config.js"></script>
+<script>
+const autoNo = qs('order_no');
+if (autoNo) document.getElementById('orderNo').value = autoNo;
+
+const STATUS = { pending:['待验证','pending'], paid:['已解锁','paid'], expired:['已过期','expired'], refunded:['已退款','refunded'] };
+
+async function query() {
+  const no = document.getElementById('orderNo').value.trim();
+  if (!no) { document.getElementById('err').textContent = '请输入订单号'; return; }
+  document.getElementById('err').textContent = '';
+  document.getElementById('result').innerHTML = '<div class="loading">查询中…</div>';
+  const r = await api('/api/orders/' + encodeURIComponent(no)).catch(() => ({}));
+  if (!r.ok) { document.getElementById('result').innerHTML = `<div class="err">${esc(r.error||'查询失败')}</div>`; return; }
+  const o = r.order;
+  const [label, cls] = STATUS[o.status] || [o.status, 'pending'];
+
+  // 付款前：只显示编号，不泄露任何内容身份
+  let box = `<div class="result-item" style="margin-top:22px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <strong style="font-family:var(--mono);color:var(--gold-l);letter-spacing:1px">${esc(o.code)}</strong>
+        <span class="status ${cls}">${label}</span>
+      </div>
+      <div style="color:var(--muted);font-size:12px;margin-top:8px;font-family:var(--mono)">
+        订单 ${esc(o.order_no)} · ${fmtPrice(o.amount)} · ${esc(o.pay_type||'')} · ${new Date(o.created_at).toLocaleString()}
+      </div>
+    </div>`;
+
+  if (o.status === 'paid') {
+    // 付款后：揭示真实内容
+    box += `<div class="reveal">
+      <div class="reveal-badge">✓ 验证通过 · 内容已解锁</div>
+      <div class="reveal-title">${esc(o.product_title || '私密档案')}</div>
+      <div class="reveal-sub">${esc(o.author||'')} ${o.file_format ? '· ' + esc(String(o.file_format).toUpperCase()) : ''}</div>`;
+    if (o.download_url) box += `<div class="result-item"><div class="lbl">下载链接</div><a href="${esc(o.download_url)}" target="_blank">${esc(o.download_url)}</a></div>`;
+    if (o.read_url) box += `<div class="result-item"><div class="lbl">在线阅读（专属链接，请勿转发）</div><a href="${esc(o.read_url)}" target="_blank">${esc(o.read_url)}</a></div>`;
+    if (o.email) box += `<div class="result-item"><div class="lbl">解锁通知已发送至</div>${esc(o.email)}</div>`;
+    if (!o.download_url && !o.read_url) box += `<div class="notice">内容准备中，请稍后刷新，或联系管理员。</div>`;
+    box += '</div>';
+  } else if (o.status === 'pending') {
+    box += `<div class="locked-state"><span class="big-lock">🔒</span>
+      档案仍处于封存状态。支付验证通过后，内容与获取方式将在此处自动揭示。<br>
+      <span style="font-size:11px">（可稍后刷新本页查看）</span></div>`;
+  }
+  document.getElementById('result').innerHTML = box;
+}
+if (autoNo) query();
+</script>
+</body>
+</html>

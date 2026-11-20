@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VAULT 密匣 · 私密内容档案馆</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="nav-inner">
+    <a class="logo" href="index.html">
+      <span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#0a0c14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+      <span class="logo-en">VAULT</span><span class="logo-cn">密匣</span>
+    </a>
+    <nav class="nav-links">
+      <a href="index.html">档案馆</a>
+      <a href="order.html">解锁记录</a>
+      <a href="admin.html" class="admin">管理</a>
+    </nav>
+  </div>
+</header>
+
+<main class="container">
+  <div class="hero">
+    <div class="hero-tag"><span class="dot"></span> ENCRYPTED · 内容在解锁前保持密封</div>
+    <h1>每一份内容，<em>解锁后可见</em></h1>
+    <p>馆藏以编号封存。完成验证后，系统自动揭示内容详情与获取方式——在此之前，你看到的只是一个编号。</p>
+  </div>
+
+  <div class="trust">
+    <div class="trust-item"><div class="trust-ico">🔐</div><div><b>内容加密封存</b><span>付款前不展示任何内容身份</span></div></div>
+    <div class="trust-item"><div class="trust-ico">⚡</div><div><b>验证即自动解锁</b><span>支付完成后系统即时发货</span></div></div>
+    <div class="trust-item"><div class="trust-ico">🛡️</div><div><b>专属链接保护</b><span>一单一码，阅读链接独立有效</span></div></div>
+  </div>
+
+  <div class="toolbar">
+    <input id="search" class="search" placeholder="输入档案编号查询，如 NO.00001">
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <div id="grid" class="grid"><div class="loading">正在读取馆藏索引…</div></div>
+  <div id="pager" style="text-align:center;margin-top:30px"></div>
+</main>
+
+<footer><span class="foot-brand">VAULT</span> · 私密内容自动解锁系统 · Powered by Cloudflare</footer>
+
+<script src="assets/config.js"></script>
+<script>
+let categories = ['全部'];
+let curCat = '全部', curQ = '', curPage = 1;
+
+async function loadCats() {
+  const r = await api('/api/products?size=50').catch(() => ({}));
+  if (r.ok) {
+    (r.list || []).forEach(p => { if (p.category && !categories.includes(p.category)) categories.push(p.category); });
+  }
+  renderTabs();
+}
+function renderTabs() {
+  document.getElementById('tabs').innerHTML = categories.map(c =>
+    `<button class="tab ${c===curCat?'active':''}" onclick="pickCat('${esc(c)}')">${esc(c)}</button>`).join('');
+}
+function pickCat(c) { curCat = c; curPage = 1; renderTabs(); load(); }
+async function load() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '<div class="loading">读取中…</div>';
+  const r = await api(`/api/products?page=${curPage}&size=12&category=${encodeURIComponent(curCat)}&q=${encodeURIComponent(curQ)}`).catch(() => ({}));
+  if (!r.ok || !r.list || r.list.length === 0) {
+    grid.innerHTML = '<div class="loading">馆藏空空如也 · 请先由管理员录入档案</div>';
+    document.getElementById('pager').innerHTML = '';
+    return;
+  }
+  grid.innerHTML = r.list.map(p => `
+    <a class="vault-card" href="book.html?code=${encodeURIComponent(p.code)}">
+      <div class="vault-art">
+        <span class="seal">SEALED</span>
+        <div class="vault-lock">${window.LOCK_SVG}</div>
+        <div class="vault-code">${esc(p.code)}</div>
+      </div>
+      <div class="vault-body">
+        <div class="vault-row">
+          <span class="cat-tag">${esc(p.category)}</span>
+          <span class="sold">已解锁 ${p.sales||0}</span>
+        </div>
+        <div class="vault-locked-line">${window.LOCK_MINI} <span>内容已加密 · 解锁后可见</span></div>
+        <div class="vault-bottom">
+          <div class="vault-price">${fmtPrice(p.price)} ${p.original_price && p.original_price>p.price ? `<small>${fmtPrice(p.original_price)}</small>`:''}</div>
+          <span class="unlock-btn">解锁 →</span>
+        </div>
+      </div>
+    </a>`).join('');
+  const pages = Math.ceil(r.total / r.size);
+  document.getElementById('pager').innerHTML = pages > 1
+    ? `<button class="btn btn-ghost btn-sm" ${curPage<=1?'disabled':''} onclick="go(${curPage-1})">← 上一页</button>
+       <span style="margin:0 14px;color:var(--muted);font-family:var(--mono);font-size:12px">${curPage} / ${pages}</span>
+       <button class="btn btn-ghost btn-sm" ${curPage>=pages?'disabled':''} onclick="go(${curPage+1})">下一页 →</button>` : '';
+}
+function go(p){ curPage=p; load(); window.scrollTo(0,0); }
+let t;
+document.getElementById('search').addEventListener('input', e => {
+  clearTimeout(t); t = setTimeout(() => { curQ = e.target.value.trim(); curPage=1; load(); }, 300);
+});
+loadCats(); load();
+</script>
+</body>
+</html>

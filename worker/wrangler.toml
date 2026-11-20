@@ -1,0 +1,40 @@
+name = "novel-shop-api"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+# ---- D1 数据库 ----
+[[d1_databases]]
+binding = "DB"
+database_name = "novel-shop-db"
+database_id = "替换为你的-d1-database-id"
+
+# ---- R2 存储（存放小说文件，可选）----
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "novel-files"
+
+# ---- KV（缓存 / 限流 / 配置，可选）----
+[[kv_namespaces]]
+binding = "KV"
+id = "替换为你的-kv-namespace-id"
+
+# ---- 环境变量（非敏感，可明文）----
+[vars]
+SITE_NAME = "VAULT 密匣 · 私密内容档案馆"
+CURRENCY = "CNY"
+PAY_CHANNEL = "epay"          # 默认支付通道：epay
+DELIVERY_METHOD = "all"        # 默认发货方式：link / read / email / all
+FRONTEND_URL = ""              # 前端 Pages 域名，如 https://novel-shop.pages.dev（支付后跳回用）
+
+# ---- 敏感变量用 secret，部署后执行：----
+# npx wrangler secret put EPAY_PID
+# npx wrangler secret put EPAY_KEY        # 易支付商户密钥
+# npx wrangler secret put EPAY_API_URL    # 如 https://ezfpy.cn/api.php 或官方网关
+# npx wrangler secret put ADMIN_PASSWORD  # 后台管理密码
+# npx wrangler secret put RESEND_API_KEY  # 邮件发货（可选）
+# npx wrangler secret put MAIL_FROM       # 发件人（可选）
+
+# ---- 自定义域名（可选，在 Cloudflare 后台绑定后填）----
+# [[routes]]
+# pattern = "api.example.com/*"
+# zone_name = "example.com"

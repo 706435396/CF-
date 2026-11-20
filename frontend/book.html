@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>解锁档案 · VAULT 密匣</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="nav-inner">
+    <a class="logo" href="index.html">
+      <span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#0a0c14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+      <span class="logo-en">VAULT</span><span class="logo-cn">密匣</span>
+    </a>
+    <nav class="nav-links">
+      <a href="index.html">档案馆</a>
+      <a href="order.html">解锁记录</a>
+      <a href="admin.html" class="admin">管理</a>
+    </nav>
+  </div>
+</header>
+
+<main class="container">
+  <div id="detail" class="detail-vault"><div class="loading">读取档案索引…</div></div>
+</main>
+
+<footer><span class="foot-brand">VAULT</span> · 私密内容自动解锁系统 · Powered by Cloudflare</footer>
+
+<script src="assets/config.js"></script>
+<script>
+const code = qs('code') || qs('slug'); // 兼容旧链接参数名
+let product = null;
+
+async function load() {
+  const r = await api('/api/products/' + encodeURIComponent(code)).catch(() => ({}));
+  if (!r.ok) { document.getElementById('detail').innerHTML = '<div class="loading">档案不存在、已下架或编号无效</div>'; return; }
+  product = r.product;
+  document.getElementById('detail').innerHTML = `
+    <div class="vault-art">
+      <span class="seal">ENCRYPTED</span>
+      <div class="vault-lock">${window.LOCK_SVG}</div>
+      <div class="vault-code">${esc(product.code)}</div>
+      <div class="detail-art-caption">SEALED ARCHIVE · 内容已封存</div>
+    </div>
+    <div class="detail-panel">
+      <div class="eyebrow">SEALED ARCHIVE / 加密档案</div>
+      <h1>档案 <em>${esc(product.code)}</em></h1>
+      <div class="detail-meta">
+        <span>分类 · ${esc(product.category)}</span>
+        <span>已解锁 ${product.sales||0} 次</span>
+      </div>
+      <div class="locked-notice">
+        🔒 <b>此档案内容已加密封存。</b><br>
+        内容名称、详情与获取方式将在<b>支付验证通过后自动揭示</b>。解锁后可在「解锁记录」页面查看，并选择网盘链接、在线阅读或邮件送达。
+      </div>
+      <div class="buy-box">
+        <div class="buy-price">${fmtPrice(product.price)} ${product.original_price && product.original_price>product.price ? `<small>${fmtPrice(product.original_price)}</small>`:''}</div>
+        <div class="field">
+          <label>接收邮箱（用于接收解锁通知与内容备份）</label>
+          <input id="email" type="email" placeholder="you@example.com">
+        </div>
+        <div class="field">
+          <label>解锁方式</label>
+          <select id="delivery">
+            <option value="all">全部方式（网盘链接 + 在线阅读 + 邮件）</option>
+            <option value="link">仅网盘 / 下载链接</option>
+            <option value="read">仅在线阅读链接</option>
+            <option value="email">仅邮件发送</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>支付方式</label>
+          <select id="paytype">
+            <option value="alipay">支付宝</option>
+            <option value="wechat">微信支付</option>
+            <option value="qq">QQ钱包</option>
+          </select>
+        </div>
+        <button class="btn btn-lg btn-block" id="buyBtn" onclick="buy()">验证并解锁 · ${fmtPrice(product.price)}</button>
+        <div class="err" id="err"></div>
+        <p class="hint">支付成功后系统自动完成验证并解锁内容。若选择「全部方式」，建议填写邮箱以便接收备份。</p>
+      </div>
+    </div>`;
+}
+
+async function buy() {
+  const email = document.getElementById('email').value.trim();
+  const delivery = document.getElementById('delivery').value;
+  const pay_type = document.getElementById('paytype').value;
+  if ((delivery === 'email' || delivery === 'all') && !email) {
+    document.getElementById('err').textContent = '请填写接收邮箱'; return;
+  }
+  const btn = document.getElementById('buyBtn');
+  btn.disabled = true; btn.textContent = '正在创建解锁订单…';
+  const r = await api('/api/orders', {
+    method: 'POST',
+    body: JSON.stringify({ code: product.code, email, pay_type, delivery_method: delivery }),
+  }).catch(() => ({}));
+  btn.disabled = false; btn.textContent = `验证并解锁 · ${fmtPrice(product.price)}`;
+  if (!r.ok) { document.getElementById('err').textContent = r.error || '创建订单失败'; return; }
+  sessionStorage.setItem('last_order', r.order_no);
+  window.location.href = r.pay_url;
+}
+load();
+</script>
+</body>
+</html>

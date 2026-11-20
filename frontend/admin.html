@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>后台管理 · VAULT 密匣</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="nav-inner">
+    <a class="logo" href="index.html">
+      <span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#0a0c14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+      <span class="logo-en">VAULT</span><span class="logo-cn">密匣 · 管理</span>
+    </a>
+    <nav class="nav-links"><a href="index.html">返回档案馆</a></nav>
+  </div>
+</header>
+
+<main class="container admin-wrap">
+  <div id="login">
+    <div class="panel">
+      <h2>🔐 后台登录</h2>
+      <div class="field"><label>管理密码</label><input id="pwd" type="password" placeholder="ADMIN_PASSWORD"></div>
+      <button class="btn btn-block" onclick="login()">登录</button>
+      <div class="err" id="loginErr"></div>
+    </div>
+  </div>
+
+  <div id="dashboard" style="display:none">
+    <div class="stat-grid" id="stats"></div>
+    <div class="toolbar">
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab('products',this)">商品管理</button>
+        <button class="tab" onclick="switchTab('orders',this)">订单管理</button>
+        <button class="tab" onclick="switchTab('add',this)">添加商品</button>
+      </div>
+    </div>
+
+    <div id="tab-products">
+      <div id="productList">加载中…</div>
+    </div>
+    <div id="tab-orders" style="display:none">
+      <div id="orderList">加载中…</div>
+    </div>
+    <div id="tab-add" style="display:none">
+      <div class="panel" style="max-width:none">
+        <h2 id="formTitle">添加商品</h2>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div class="field"><label>标识 slug（英文，唯一）</label><input id="f_slug" placeholder="my-novel"></div>
+          <div class="field"><label>书名</label><input id="f_title"></div>
+          <div class="field"><label>作者</label><input id="f_author" value="佚名"></div>
+          <div class="field"><label>分类</label><input id="f_category" value="都市"></div>
+          <div class="field"><label>售价（元）</label><input id="f_price" type="number" step="0.01" value="9.9"></div>
+          <div class="field"><label>划线价（元）</label><input id="f_original" type="number" step="0.01" value="0"></div>
+          <div class="field"><label>格式</label><select id="f_format"><option>txt</option><option>epub</option><option>md</option><option>pdf</option></select></div>
+          <div class="field"><label>状态</label><select id="f_status"><option value="on">上架</option><option value="off">下架</option></select></div>
+          <div class="field" style="grid-column:1/-1"><label>网盘/直链地址（下载发货用）</label><input id="f_drive" placeholder="https://pan.quark.cn/..."></div>
+          <div class="field" style="grid-column:1/-1"><label>R2 文件 key（可选，如 novels/xxx.txt）</label><input id="f_r2key"></div>
+          <div class="field" style="grid-column:1/-1"><label>封面 URL（可选）</label><input id="f_cover"></div>
+          <div class="field" style="grid-column:1/-1"><label>简介</label><textarea id="f_desc" rows="3"></textarea></div>
+          <div class="field" style="grid-column:1/-1"><label>正文（在线阅读用，短篇可粘贴全文）</label><textarea id="f_content" rows="5"></textarea></div>
+        </div>
+        <input type="hidden" id="f_id">
+        <button class="btn" onclick="saveProduct()">保存商品</button>
+        <button class="btn btn-ghost" onclick="resetForm()">清空</button>
+        <div class="err" id="formErr"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer><span class="foot-brand">VAULT</span> · 私密内容自动解锁系统</footer>
+
+<script src="assets/config.js"></script>
+<script>
+let TOKEN = sessionStorage.getItem('admin_token') || '';
+if (TOKEN) showDash();
+
+function authHeaders(){ return { 'Authorization': 'Bearer ' + TOKEN }; }
+
+async function login() {
+  const pwd = document.getElementById('pwd').value;
+  const r = await api('/api/admin/login', { method:'POST', body: JSON.stringify({ password: pwd }) }).catch(()=>({}));
+  if (!r.ok) { document.getElementById('loginErr').textContent = r.error || '登录失败'; return; }
+  TOKEN = r.token; sessionStorage.setItem('admin_token', TOKEN); showDash();
+}
+function showDash() {
+  document.getElementById('login').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  loadStats(); loadProducts(); loadOrders();
+}
+async function apiAdmin(path, opts={}) {
+  opts.headers = { ...authHeaders(), ...(opts.headers||{}) };
+  return api(path, opts);
+}
+async function loadStats() {
+  const r = await apiAdmin('/api/admin/stats').catch(()=>({}));
+  if (r.ok) document.getElementById('stats').innerHTML = [
+    ['商品数', r.products], ['订单数', r.orders], ['已支付', r.paid], ['待支付', r.pending], ['销售额', fmtPrice(r.revenue)]
+  ].map(([label,num])=>`<div class="stat"><div class="num">${num}</div><div class="label">${label}</div></div>`).join('');
+}
+function switchTab(tab, el) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); el.classList.add('active');
+  ['products','orders','add'].forEach(t=>document.getElementById('tab-'+t).style.display = t===tab?'block':'none');
+}
+async function loadProducts() {
+  const r = await apiAdmin('/api/admin/products').catch(()=>({}));
+  if (!r.ok) { document.getElementById('productList').innerHTML = `<div class="err">${esc(r.error)}</div>`; return; }
+  if (!r.list.length) { document.getElementById('productList').innerHTML = '<div class="notice">暂无商品，请点“添加商品”或使用批量脚本导入。</div>'; return; }
+  const code = p => 'NO.' + String(p.id).padStart(5,'0');
+  document.getElementById('productList').innerHTML = `<div class="notice">前台已全面脱敏：访客仅能看到档案编号（由 ID 派生）、分类与价格，书名/作者/封面/正文均不会出现在任何公开接口，付款验证通过后才揭示。</div>` +
+    `<table><thead><tr><th>档案编号</th><th>名称（仅管理员可见）</th><th>分类</th><th>价格</th><th>销量</th><th>状态</th><th>操作</th></tr></thead><tbody>` +
+    r.list.map(p=>`<tr>
+      <td style="font-family:var(--mono);color:var(--gold-l)">${code(p)}</td>
+      <td>${esc(p.title)}</td>
+      <td>${esc(p.category)}</td><td>${fmtPrice(p.price)}</td><td>${p.sales||0}</td>
+      <td><span class="status ${p.status==='on'?'paid':'expired'}">${p.status==='on'?'上架':'下架'}</span></td>
+      <td><button class="btn btn-sm" onclick="editProduct(${p.id})">编辑</button>
+          <button class="btn btn-sm btn-ghost" onclick="delProduct(${p.id})">删</button></td>
+    </tr>`).join('') + '</tbody></table>';
+}
+async function loadOrders() {
+  const r = await apiAdmin('/api/admin/orders').catch(()=>({}));
+  if (!r.ok || !r.list.length) { document.getElementById('orderList').innerHTML = '<div class="notice">暂无订单</div>'; return; }
+  document.getElementById('orderList').innerHTML = `<table><thead><tr><th>订单号</th><th>商品</th><th>金额</th><th>状态</th><th>邮箱</th><th>时间</th><th>操作</th></tr></thead><tbody>` +
+    r.list.map(o=>`<tr>
+      <td style="font-size:11px">${esc(o.order_no)}</td><td>${esc(o.product_title)}</td><td>${fmtPrice(o.amount)}</td>
+      <td><span class="status ${o.status==='paid'?'paid':o.status==='pending'?'pending':'expired'}">${o.status}</span></td>
+      <td>${esc(o.email||'-')}</td><td>${new Date(o.created_at).toLocaleDateString()}</td>
+      <td>${o.status==='paid'?`<button class="btn btn-sm btn-ghost" onclick="resend('${esc(o.order_no)}')">补发</button>`:'-'}</td>
+    </tr>`).join('') + '</tbody></table>';
+}
+async function editProduct(id) {
+  const r = await apiAdmin('/api/admin/products/'+id).catch(()=>({}));
+  if (!r.ok) return;
+  const p = r.product;
+  document.getElementById('f_id').value = p.id;
+  document.getElementById('f_slug').value = p.slug; document.getElementById('f_title').value = p.title;
+  document.getElementById('f_author').value = p.author; document.getElementById('f_category').value = p.category;
+  document.getElementById('f_price').value = p.price/100; document.getElementById('f_original').value = (p.original_price||0)/100;
+  document.getElementById('f_format').value = p.file_format; document.getElementById('f_status').value = p.status;
+  document.getElementById('f_drive').value = p.drive_url||''; document.getElementById('f_r2key').value = p.r2_key||'';
+  document.getElementById('f_cover').value = p.cover_url||''; document.getElementById('f_desc').value = p.description||'';
+  document.getElementById('f_content').value = p.content||'';
+  document.getElementById('formTitle').textContent = '编辑商品 #' + p.id;
+  switchTab('add', document.querySelectorAll('.tab')[2]);
+  window.scrollTo(0, document.getElementById('tab-add').offsetTop);
+}
+function resetForm(){ document.getElementById('tab-add').querySelectorAll('input,textarea').forEach(e=>{if(e.type!=='hidden')e.value=''}); document.getElementById('f_id').value=''; document.getElementById('formTitle').textContent='添加商品'; }
+async function saveProduct() {
+  const p = {
+    slug: document.getElementById('f_slug').value.trim(), title: document.getElementById('f_title').value.trim(),
+    author: document.getElementById('f_author').value.trim(), category: document.getElementById('f_category').value.trim(),
+    price: Math.round(parseFloat(document.getElementById('f_price').value||0)*100),
+    original_price: Math.round(parseFloat(document.getElementById('f_original').value||0)*100),
+    file_format: document.getElementById('f_format').value, status: document.getElementById('f_status').value,
+    drive_url: document.getElementById('f_drive').value.trim(), r2_key: document.getElementById('f_r2key').value.trim(),
+    cover_url: document.getElementById('f_cover').value.trim(), description: document.getElementById('f_desc').value,
+    content: document.getElementById('f_content').value,
+  };
+  if (!p.slug || !p.title) { document.getElementById('formErr').textContent = 'slug 和书名必填'; return; }
+  const id = document.getElementById('f_id').value;
+  const r = await apiAdmin(id? '/api/admin/products/'+id : '/api/admin/products', {
+    method: id?'PUT':'POST', body: JSON.stringify(p)
+  }).catch(()=>({}));
+  if (!r.ok) { document.getElementById('formErr').textContent = r.error||'保存失败'; return; }
+  alert('保存成功'); resetForm(); loadProducts(); loadStats();
+}
+async function delProduct(id) {
+  if (!confirm('确认删除商品 #'+id+'？')) return;
+  await apiAdmin('/api/admin/products/'+id, { method:'DELETE' }); loadProducts(); loadStats();
+}
+async function resend(no) {
+  const r = await apiAdmin('/api/admin/resend/'+encodeURIComponent(no), { method:'POST' }).catch(()=>({}));
+  alert(r.ok ? '已重新发货' : '补发失败：'+(r.error||''));
+}
+</script>
+</body>
+</html>
