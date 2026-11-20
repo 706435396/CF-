@@ -189,9 +189,12 @@ python bulk_import.py --api https://novel-shop-api.<账号>.workers.dev \
 
 R2 桶 `cr-commodity` 已通过 `wrangler.toml` 的 `[[r2_buckets]]` 绑定为 `FILES`。在 `admin.html` 的“添加商品”里可直接选文件上传：
 
-1. 打开 `/admin.html` → 添加商品 → 「上传文件到 R2」选文件（**可按 Ctrl/Shift 多选批量上传**，txt/md/epub/pdf，单个≤100MB）→ 点「批量上传到 R2」。
-2. 上传成功后**随机 key 自动填入**「R2 文件 key」（形如 `files/a1b2c3....txt`，不可猜、不含中文）。多选时逐个上传，消息区列出每个文件对应的 key（每个文件需分别建一个商品、填入对应 key）。
-3. 填书名/价格 → 保存商品。买家付款后即拿到带令牌的下载链接。
+选好文件（**可按 Ctrl/Shift 多选**，txt/md/epub/pdf，单个≤100MB）后有两个按钮：
+
+- **仅传 R2**：只把选中的文件逐个上传到 R2，拿到随机 key（形如 `files/a1b2c3....txt`，不可猜、不含中文）。单个 key 自动填入「R2 文件 key」；多个在消息区列出每个文件→key 的对照表，你再自己逐个建商品、填对应 key。
+- **一键批量上架**：传 R2 **并自动为每个文件建一个商品**——书名取文件名（去扩展名），价格/划线价/分类/作者/状态用上方表单的填写值，格式按扩展名，slug 自动生成并去重。几百本也能一次上架完。
+
+买家付款后即拿到带令牌的下载链接。
 
 底层是 `POST /api/admin/upload`（后台登录 token 鉴权），用随机串生成 key 写入 R2。也可用命令行直传：
 ```bash
@@ -222,8 +225,8 @@ python bulk_upload_r2.py --api https://novel-shop-api.<账号>.workers.dev \
 |---|---|---|---|
 | A 后台逐个 | ❌ | D1 正文 或 R2 | 临时加一两本 |
 | B `bulk_import.py` | ✅ | D1 正文 / 网盘链接 | 短篇、要在线阅读 |
-| C 网页多选上传 | ✅(传文件) | R2 | 几十本内、可视化操作 |
-| D `bulk_upload_r2.py` | ✅(传文件+建商品) | R2 | 大批量、任意格式/大文件 |
+| C 网页「一键批量上架」 | ✅(传文件+建商品) | R2 | 可视化批量上架，书名取文件名 |
+| D `bulk_upload_r2.py` | ✅(传文件+建商品) | R2 | 超大批量、命令行、可断点续跑 |
 
 **存储压缩说明**：正文（`content` 字段）当前为明文存储，HTTP 传输由 Cloudflare 自动 gzip/Brotli 压缩；数据库内的存储压缩（如 gzip 后 base64）尚未实现。大文件建议走 R2/网盘而非塞进 `content`。
 

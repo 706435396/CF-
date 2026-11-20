@@ -58,11 +58,13 @@
           <div class="field" style="grid-column:1/-1"><label>网盘/直链地址（下载发货用）</label><input id="f_drive" placeholder="https://pan.quark.cn/..."></div>
           <div class="field" style="grid-column:1/-1"><label>R2 文件 key（上传后自动填入，也可手填已有文件）</label><input id="f_r2key" placeholder="files/xxxxxxxx.txt"></div>
           <div class="field" style="grid-column:1/-1">
-            <label>上传文件到 R2（可多选，逐个上传后列出全部 key；支持 txt/md/epub/pdf，单个≤100MB）</label>
+            <label>上传文件到 R2（可多选，Ctrl/Shift 选多个；支持 txt/md/epub/pdf，单个≤100MB）</label>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
               <input type="file" id="f_file" accept=".txt,.md,.epub,.pdf" multiple style="flex:1;min-width:200px">
-              <button type="button" class="btn btn-sm" id="uploadBtn" onclick="uploadFile()">批量上传到 R2</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="uploadBtn" onclick="uploadFile()">仅传 R2</button>
+              <button type="button" class="btn btn-sm" id="batchBtn" onclick="bulkPublish()">一键批量上架</button>
             </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">「仅传 R2」只上传拿 key（自己逐个建商品）；「一键批量上架」自动传 R2 并为每个文件建商品，书名取文件名，价格/分类/作者/状态用上方表单的值。</div>
             <div id="uploadMsg" style="font-size:12px;color:var(--muted);margin-top:6px;white-space:pre-wrap"></div>
           </div>
           <div class="field" style="grid-column:1/-1"><label>封面 URL（可选）</label><input id="f_cover"></div>
@@ -228,6 +230,89 @@ async function uploadFile() {
   if (skipped.length) lines.push(`跳过 ${skipped.length} 个：${skipped.join('、')}`);
   if (fails.length) lines.push(`失败 ${fails.length} 个：${fails.join('、')}`);
   msg.textContent = lines.join('\n');
+}
+
+// 一键批量上架：传 R2 → 自动为每个文件建商品（书名取文件名，统一用表单的价格/分类/作者/状态）
+async function bulkPublish() {
+  const fi = document.getElementById('f_file');
+  const msg = document.getElementById('uploadMsg');
+  const btn = document.getElementById('batchBtn');
+  const files = Array.from(fi.files || []);
+  if (!files.length) { msg.textContent = '请先选择文件（可按 Ctrl / Shift 多选）'; return; }
+
+  // 统一字段（取自表单）
+  const category = document.getElementById('f_category').value.trim() || '其他';
+  const author = document.getElementById('f_author').value.trim() || '佚名';
+  const price = Math.round(parseFloat(document.getElementById('f_price').value || 0) * 100);
+  const original = Math.round(parseFloat(document.getElementById('f_original').value || 0) * 100);
+  const status = document.getElementById('f_status').value;
+  const base = (window.API_BASE || '').replace(/\/$/, '');
+
+  // 校验扩展名 + 大小
+  const valid = [], skipped = [];
+  for (const f of files) {
+    const ext = f.name.split('.').pop().toLowerCase();
+    if (!['txt','md','epub','pdf'].includes(ext)) { skipped.push(`${f.name}（格式不支持）`); continue; }
+    if (f.size > 100 * 1024 * 1024) { skipped.push(`${f.name}（超过 100MB）`); continue; }
+    valid.push(f);
+  }
+  if (!valid.length) { msg.textContent = '没有可上架的文件。仅支持 txt/md/epub/pdf，单个≤100MB'; return; }
+
+  // 拉取已有 slug，避免唯一约束冲突（断点友好）
+  let used = new Set();
+  try {
+    const ex = await apiAdmin('/api/admin/products').catch(()=>({}));
+    if (ex.ok && ex.list) used = new Set(ex.list.map(x => x.slug));
+  } catch (e) { /* 拉不到就靠随机后缀兜底 */ }
+  const mkSlug = (name) => {
+    let s = name.replace(/\.[^.]+$/, '').replace(/[^\w\u4e00-\u9fff]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'item';
+    let c = s, n = 2;
+    while (used.has(c)) { c = s + '-' + n; n++; }
+    used.add(c);
+    return c;
+  };
+
+  const oks = [], fails = [];
+  btn.disabled = true;
+  try {
+    for (let i = 0; i < valid.length; i++) {
+      const f = valid[i];
+      const ext = f.name.split('.').pop().toLowerCase();
+      msg.textContent = `批量上架 ${i+1}/${valid.length}：${f.name}`;
+      try {
+        // 1) 传 R2
+        const resp = await fetch(`${base}/api/admin/upload?name=${encodeURIComponent(f.name)}`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/octet-stream' },
+          body: await f.arrayBuffer(),
+        });
+        const up = await resp.json();
+        if (!up.ok || !up.key) throw new Error(up.error || resp.status);
+        // 2) 建商品绑定 key
+        const title = f.name.replace(/\.[^.]+$/, '');
+        const payload = {
+          slug: mkSlug(f.name), title, author, category,
+          price, original_price: original, file_format: ext,
+          file_name: f.name, file_size: f.size, r2_key: up.key,
+          content: '', description: `《${title}》 私密档案，付款后自动发货。`, status,
+        };
+        const created = await apiAdmin('/api/admin/products', { method: 'POST', body: JSON.stringify(payload) });
+        if (!created.ok) throw new Error(created.error || '建商品失败');
+        oks.push(`${title}（${up.key}）`);
+      } catch (e) {
+        fails.push(`${f.name}：${e.message}`);
+      }
+    }
+  } finally {
+    btn.disabled = false;
+  }
+
+  const lines = [`批量上架完成：成功 ${oks.length}/${valid.length}`];
+  if (oks.length) lines.push('✓ ' + oks.join('\n✓ '));
+  if (skipped.length) lines.push(`跳过 ${skipped.length} 个：${skipped.join('、')}`);
+  if (fails.length) lines.push(`失败 ${fails.length} 个：${fails.join('、')}`);
+  msg.textContent = lines.join('\n');
+  if (oks.length) { loadProducts(); loadStats(); }
 }
 async function delProduct(id) {
   if (!confirm('确认删除商品 #'+id+'？')) return;
