@@ -8,12 +8,11 @@ binding = "DB"
 database_name = "novel-shop-db"
 database_id = "替换为你的-d1-database-id"
 
-# ---- R2 存储（存放小说文件，可选）----
-# 默认注释：代码对 R2 做了空值保护，不配置也能正常用「网盘直链 + 在线阅读」发货。
-# 如需 R2：先在 Cloudflare 建桶，再取消下面 3 行注释，并把 bucket_name 改成你的桶名。
-# [[r2_buckets]]
-# binding = "FILES"
-# bucket_name = "novel-files"
+# ---- R2 存储（存放小说文件）----
+# 已启用：桶名 cr-commodity，binding 名 FILES（代码通过 env.FILES 读写）
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "cr-commodity"
 
 # ---- KV（缓存 / 限流 / 配置，预留，当前代码未使用）----
 # 如需启用：在 Cloudflare 建命名空间，取消注释并填入 id。
