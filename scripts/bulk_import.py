@@ -29,10 +29,16 @@ if sys.platform == 'win32':
         pass
 
 
+# Cloudflare 会拦截 Python-urllib 默认 UA（error 1010 / HTTP 403），
+# 必须伪装成浏览器 UA 才能通过边缘防护。
+BROWSER_UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+              '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36')
+
+
 def api_call(base, path, method='GET', body=None, token=None):
     url = base.rstrip('/') + path
     data = json.dumps(body).encode('utf-8') if body is not None else None
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/json', 'User-Agent': BROWSER_UA}
     if token:
         headers['Authorization'] = 'Bearer ' + token
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
