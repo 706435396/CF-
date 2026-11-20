@@ -1,7 +1,8 @@
 // ============ 前端全局配置 ============
-// 部署后把 API_BASE 改成你的 Worker 域名，例如 https://novel-shop-api.xxx.workers.dev
-// 如果前后端同域，可留空字符串 ''
-window.API_BASE = '';
+// API_BASE = 后端 Worker 域名。前端由 CF Pages 原生 Git 集成部署（用仓库原始文件，
+// 不经 Actions 注入），因此这里直接写死真实 Worker 地址。
+// 若以后更换 Worker 域名，改这里 -> commit -> push 即可（Pages 会自动重新部署）。
+window.API_BASE = 'https://novel-shop-api.706435396.workers.dev';
 window.SITE_NAME = 'VAULT 密匣 · 私密内容档案馆';
 
 // 统一的锁形图标（列表卡片 / 详情页复用）

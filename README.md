@@ -60,17 +60,43 @@ CR自动发货/
 
 > KV 当前代码未使用，无需创建。
 
-## 二、自动部署（推荐 · 已内置 GitHub Actions）
+## 二、部署（前端 Pages 走 CF 原生 Git 集成 + Actions 只部署 Worker）
 
-仓库已内置 `.github/workflows/deploy.yml`。配好下方 Secrets / Variables 后，**每次 push 到 `main`（或手动点 Run workflow）自动完成：建表 → 写密钥 → 部署 Worker → 部署 Pages**，本地无需装 wrangler。
+### 架构分工（重要）
 
-### 第 1 步：配置 Repository Secrets
+本项目有**两套独立部署**，互不干扰：
+
+| 部分 | 部署方式 | 触发 | 为什么 |
+|---|---|---|---|
+| **前端 Pages** | Cloudflare 原生 Git 集成 | push 到 `main` 自动部署 | 纯静态站，CF 原生集成最简单稳定 |
+| **后端 Worker** | GitHub Actions（`.github/workflows/deploy.yml`） | push 到 `main` 自动部署 | 需要写 D1 表 + secrets，Pages 原生集成做不到 |
+
+> 曾尝试让 Actions 同时部署 Pages，但易与 CF 原生 Git 集成**重复部署、互相覆盖**。现已收敛：Actions 只管 Worker，前端完全交给 CF 原生集成。
+
+域名已**写死在代码里，无需再配任何 Variables**：
+- 前端 API 地址：写死在 `frontend/assets/config.js` 的 `window.API_BASE`。
+- 支付后回跳地址：写死在 `worker/wrangler.toml` 的 `FRONTEND_URL`。
+
+若以后换域名，改这两个文件 → commit → push，前端 Pages 会自动重新部署，Actions 会重新部署 Worker。
+
+### 第 1 步：配置 Cloudflare Pages 原生 Git 集成（前端）
+
+1. Dashboard → `Workers 和 Pages → Pages → 创建 → 连接到 Git`，选择 GitHub 仓库 `CF-`。
+2. 构建配置：
+   - **构建命令**：留空（纯静态）
+   - **构建输出目录**：`frontend` ⚠️（关键，填错会导致根域名 404）
+   - **根目录 / root directory**：留空
+3. 保存部署。CF 会分配形如 `https://<项目名>.pages.dev` 的域名。
+   - 注意：你的仓库名 `CF-` 以连字符结尾，CF 会规范化为带后缀的名字（如 `cf-3i9`，**字母 i 不是数字 1**）。以 Dashboard 显示为准。
+4. 确认生产域名可访问：项目 `部署（Deployments）` 列表中，最新一次部署的 **Production** 分支（通常是 `main`）对应的 `xxx.pages.dev` 才能打开。若只有 Preview 地址能开、根域名 404，去项目 `设置 → 构建配置 → 生产分支` 设为 `main` 并重新部署。
+
+### 第 2 步：配置 Repository Secrets（后端 Worker Actions）
 
 进入仓库 `Settings → Secrets and variables → Actions → New repository secret`：
 
 | Secret | 值 | 必填 |
 |---|---|---|
-| `CF_API_TOKEN` | 上一步创建的 API Token | ✅ |
+| `CF_API_TOKEN` | 第一节创建的 API Token | ✅ |
 | `CF_ACCOUNT_ID` | Cloudflare 账户 ID | ✅ |
 | `D1_DATABASE_ID` | D1 数据库的 Database ID | ✅ |
 | `EPAY_PID` | 易支付商户 PID | 可选* |
@@ -82,30 +108,17 @@ CR自动发货/
 
 > \* 支付/后台密钥也可在本地用 `wrangler secret put` 设置一次（会持久保留），不一定放 GitHub；要走 CI 自动写入就填这里。
 
-### 第 2 步：配置 Repository Variables
+**Variables 无需再配置**（`WORKER_URL` / `FRONTEND_URL` / `PAGES_PROJECT` 均已废弃，可删除）。
 
-同页面切到 `Variables` 标签：
+### 第 3 步：触发部署与验收
 
-| Variable | 值 | 说明 |
-|---|---|---|
-| `WORKER_URL` | `https://novel-shop-api.<账号>.workers.dev` | 注入前端 `config.js` 的 `API_BASE`；首次可留空 |
-| `FRONTEND_URL` | `https://vault-shop.pages.dev` | 支付后跳回前端用；首次可留空 |
-| `PAGES_PROJECT` | `vault-shop` | Pages 项目名，留空则默认 `vault-shop` |
-
-### 第 3 步：触发部署
-
-1. 任意改动 push 到 `main`，或在 Actions 页点 `Run workflow`。
-2. 工作流先检查凭证：3 个必填 Secret 缺任一个 → 本次**跳过**（绿勾 + Summary 列出缺项），不会失败。
-3. 凭证齐全 → 自动建表（幂等）→ 写 secrets → 部署 Worker → 部署 Pages。
-4. 到 Actions 运行页 **Summary** 查看 Worker / Pages 地址。
-
-### 第 4 步：回填域名（首次部署后做一次）
-
-1. 拿到 Worker 域名 → 填入 Variable `WORKER_URL`。
-2. 拿到 Pages 域名 → 填入 Variable `FRONTEND_URL`。
-3. 再 push 一次（或点 Run workflow）——此时前端 `config.js` 带上正确 API 地址，支付后也能跳回前端。
-
-> 自定义域名：在 Pages / Worker 项目 `设置 → 自定义域` 绑定自己的域名，再把该域名填进 `WORKER_URL` / `FRONTEND_URL`。
+1. 任意改动 push 到 `main`，CF Pages（前端）与 Actions（Worker）会**各自自动部署**。
+2. Actions 先检查凭证：3 个必填 Secret 缺任一个 → 本次**跳过**（绿勾 + Summary 列出缺项），不会失败。
+3. 凭证齐全 → 自动建表（幂等）→ 写 secrets → 部署 Worker。Actions 运行页 **Summary** 会显示 Worker 地址。
+4. 验收：
+   - 打开前端 Pages 域名 → 首页能加载出档案卡（说明前端 → Worker API 通了）。
+   - 打开 `/admin.html`，输入 `ADMIN_PASSWORD` 能登录（说明 Worker secret 写入成功）。
+   - 若首页白屏 → 多半是 `config.js` 的 `API_BASE` 与 Worker 实际域名不符，核对后改之。
 
 ## 三、手动部署（备选 · 不依赖 GitHub Actions）
 
@@ -114,7 +127,7 @@ CR自动发货/
 ```bash
 npm install -g wrangler && npx wrangler login
 cd worker
-# 1. 编辑 wrangler.toml，填入 D1 database_id
+# 1. 编辑 wrangler.toml，填入 D1 database_id（FRONTEND_URL 已写死，一般无需改）
 # 2. 建表
 npx wrangler d1 execute novel-shop-db --remote --file=../db/schema.sql
 # 3. 设置敏感密钥（按提示输入）
@@ -126,12 +139,8 @@ npx wrangler secret put RESEND_API_KEY   # 可选
 npx wrangler secret put MAIL_FROM        # 可选
 # 4. 部署 Worker
 npx wrangler deploy
-# 5. 部署 Pages（先在 frontend/assets/config.js 填 Worker 域名）
-npx wrangler pages deploy ../frontend --project-name=vault-shop --commit-dirty=true
 ```
- Worker 域名形如 `https://novel-shop-api.<账号>.workers.dev`，Pages 域名形如 `https://vault-shop.pages.dev`。
-
-> Pages 也可走原生 Git 集成：Dashboard → `Pages → 创建 → 连接到 Git`，构建命令留空、输出目录 `frontend`（此方式只自动部署前端，Worker 仍需手动/CI 部署）。
+Worker 域名形如 `https://novel-shop-api.<账号>.workers.dev`。前端 Pages 推荐走第二节的原生 Git 集成（push 自动部署，输出目录 `frontend`）；若临时手动上传，可执行 `cd frontend && npx wrangler pages deploy . --project-name=<你的项目名>`（确保 `config.js` 的 `API_BASE` 已指向上面的 Worker 域名）。
 
 ## 四、配置易支付回调
 

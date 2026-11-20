@@ -27,7 +27,7 @@ SITE_NAME = "VAULT 密匣 · 私密内容档案馆"
 CURRENCY = "CNY"
 PAY_CHANNEL = "epay"          # 默认支付通道：epay
 DELIVERY_METHOD = "all"        # 默认发货方式：link / read / email / all
-FRONTEND_URL = ""              # 前端 Pages 域名，如 https://novel-shop.pages.dev（支付后跳回用）
+FRONTEND_URL = "https://cf-3i9.pages.dev"  # 前端 Pages 域名，支付后跳回用（字母 i，非数字 1）
 
 # ---- 敏感变量用 secret，部署后执行：----
 # npx wrangler secret put EPAY_PID
