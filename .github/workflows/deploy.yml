@@ -1,0 +1,162 @@
+name: Deploy · VAULT (Worker + Pages)
+
+# 触发：push 到 main / 手动点击
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一时间只允许一个部署，避免并发写 D1 / 覆盖域名
+concurrency:
+  group: vault-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: 检查部署凭证
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.verify.outputs.ready }}
+    steps:
+      - id: verify
+        name: 验证 Secrets / Variables 是否齐全
+        env:
+          CF_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
+          D1_ID: ${{ secrets.D1_DATABASE_ID }}
+        run: |
+          missing=""
+          [ -z "$CF_TOKEN" ]   && missing="$missing CF_API_TOKEN"
+          [ -z "$CF_ACCOUNT" ] && missing="$missing CF_ACCOUNT_ID"
+          [ -z "$D1_ID" ]      && missing="$missing D1_DATABASE_ID"
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### ⚠️ 本次仅检查、未部署" >> "$GITHUB_STEP_SUMMARY"
+            echo "缺少以下 Repository Secrets / Variables（在 Settings → Secrets and variables → Actions 添加）：" >> "$GITHUB_STEP_SUMMARY"
+            for m in $missing; do echo "- \`$m\`" >> "$GITHUB_STEP_SUMMARY"; done
+            echo "配齐后重新 push 或点 Run workflow 即会自动部署。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "✅ 部署凭证齐全，开始部署。" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  deploy-worker:
+    name: 部署后端 Worker
+    needs: check
+    if: needs.check.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 Wrangler
+        run: npm install -g wrangler@4
+
+      - name: 注入账号相关配置（D1 ID / 域名）
+        env:
+          D1_ID: ${{ secrets.D1_DATABASE_ID }}
+          WORKER_URL: ${{ vars.WORKER_URL }}
+          FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+        working-directory: worker
+        run: |
+          # 1) 替换 D1 database_id 占位符（用 | 作分隔符，避免 URL 里的 / 干扰）
+          sed -i "s|替换为你的-d1-database-id|${D1_ID}|g" wrangler.toml
+          # 2) 回填 FRONTEND_URL（支付后跳回前端），变量为空则保持 ''
+          if [ -n "$FRONTEND_URL" ]; then
+            sed -i "s|^FRONTEND_URL = .*|FRONTEND_URL = \"${FRONTEND_URL}\"|" wrangler.toml
+          fi
+          echo "--- 注入结果自检 ---"
+          grep -nE "database_id|FRONTEND_URL" wrangler.toml
+
+      - name: 初始化 D1 表结构（幂等，可重复执行）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        working-directory: worker
+        run: wrangler d1 execute novel-shop-db --remote --file=../db/schema.sql
+
+      - name: 写入 Worker Secrets（仅当在仓库配置了对应 Secret）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          EPAY_PID: ${{ secrets.EPAY_PID }}
+          EPAY_KEY: ${{ secrets.EPAY_KEY }}
+          EPAY_API_URL: ${{ secrets.EPAY_API_URL }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+        working-directory: worker
+        run: |
+          for pair in \
+            "EPAY_PID=$EPAY_PID" \
+            "EPAY_KEY=$EPAY_KEY" \
+            "EPAY_API_URL=$EPAY_API_URL" \
+            "ADMIN_PASSWORD=$ADMIN_PASSWORD" \
+            "RESEND_API_KEY=$RESEND_API_KEY" \
+            "MAIL_FROM=$MAIL_FROM"; do
+            name="${pair%%=*}"
+            value="${pair#*=}"
+            if [ -n "$value" ]; then
+              printf '%s' "$value" | wrangler secret put "$name"
+              echo "✅ 已写入 secret: $name"
+            else
+              echo "⏭️ 未配置，跳过 secret: $name"
+            fi
+          done
+
+      - name: 部署 Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        working-directory: worker
+        run: |
+          wrangler deploy 2>&1 | tee /tmp/deploy.log
+          echo "### ✅ Worker 已部署" >> "$GITHUB_STEP_SUMMARY"
+          grep -oE 'https://[^ ]+\.workers\.dev' /tmp/deploy.log | head -1 | sed 's/^/- 地址: /' >> "$GITHUB_STEP_SUMMARY" || true
+
+  deploy-pages:
+    name: 部署前端 Pages
+    needs: [check, deploy-worker]
+    if: needs.check.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装 Wrangler
+        run: npm install -g wrangler@4
+
+      - name: 注入前端 API 地址
+        env:
+          WORKER_URL: ${{ vars.WORKER_URL }}
+        run: |
+          # 把 Worker 域名写进 config.js（sed 用 | 分隔，转义 URL 中的 /）
+          sed -i "s|^window.API_BASE = .*|window.API_BASE = '${WORKER_URL}';|" frontend/assets/config.js
+          echo "--- 注入结果自检 ---"
+          grep -n "window.API_BASE" frontend/assets/config.js | head -1
+
+      - name: 部署 Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          PAGES_PROJECT: ${{ vars.PAGES_PROJECT }}
+        run: |
+          PROJECT="${PAGES_PROJECT:-vault-shop}"
+          wrangler pages deploy frontend \
+            --project-name="$PROJECT" \
+            --branch=main \
+            --commit-dirty=true 2>&1 | tee /tmp/pages.log
+          echo "### ✅ Pages 已部署" >> "$GITHUB_STEP_SUMMARY"
+          grep -oE 'https://[^ ]+\.pages\.dev' /tmp/pages.log | head -1 | sed 's/^/- 地址: /' >> "$GITHUB_STEP_SUMMARY" || true
+          echo "- 项目名: $PROJECT" >> "$GITHUB_STEP_SUMMARY"

@@ -54,48 +54,84 @@ CR自动发货/
 
 在 [Cloudflare Dashboard](https://dash.cloudflare.com) 完成：
 
-1. **创建 D1 数据库**：`Workers 和 Pages → D1 → 创建数据库`，名称 `novel-shop-db`，记下 Database ID。
-2. **创建 KV 命名空间**（可选）：`Workers 和 Pages → KV → 创建命名空间`，记下 ID。
-3. **创建 R2 存储桶**（可选）：`R2 → 创建存储桶`，名称 `novel-files`。
-4. 安装 Wrangler：`npm install -g wrangler` 并 `npx wrangler login`。
+1. **创建 D1 数据库**（必做）：`Workers 和 Pages → D1 → 创建数据库`，名称 `novel-shop-db`，记下 **Database ID**。
+2. **创建 API Token**（必做）：`我的个人资料 → API 令牌 → 创建令牌`，选模板 **编辑 Cloudflare Workers**，权限需含 `D1:编辑`、`Workers 脚本:编辑`、`Account Settings:读取`。记下 Token 与 **Account ID**（右侧栏可见）。
+3. **R2 存储桶**（可选）：仅当小说正文/文件要存进 R2 时创建；用网盘直链发货可跳过。
 
-## 二、部署后端 Worker
+> KV 当前代码未使用，无需创建。
+
+## 二、自动部署（推荐 · 已内置 GitHub Actions）
+
+仓库已内置 `.github/workflows/deploy.yml`。配好下方 Secrets / Variables 后，**每次 push 到 `main`（或手动点 Run workflow）自动完成：建表 → 写密钥 → 部署 Worker → 部署 Pages**，本地无需装 wrangler。
+
+### 第 1 步：配置 Repository Secrets
+
+进入仓库 `Settings → Secrets and variables → Actions → New repository secret`：
+
+| Secret | 值 | 必填 |
+|---|---|---|
+| `CF_API_TOKEN` | 上一步创建的 API Token | ✅ |
+| `CF_ACCOUNT_ID` | Cloudflare 账户 ID | ✅ |
+| `D1_DATABASE_ID` | D1 数据库的 Database ID | ✅ |
+| `EPAY_PID` | 易支付商户 PID | 可选* |
+| `EPAY_KEY` | 易支付商户密钥 | 可选* |
+| `EPAY_API_URL` | 支付网关，如 `https://ezfpy.cn/api.php` | 可选* |
+| `ADMIN_PASSWORD` | 后台管理密码 | 可选* |
+| `RESEND_API_KEY` | 邮件发货（不配则跳过邮件） | 可选 |
+| `MAIL_FROM` | 发件人（Resend 需验证域名） | 可选 |
+
+> \* 支付/后台密钥也可在本地用 `wrangler secret put` 设置一次（会持久保留），不一定放 GitHub；要走 CI 自动写入就填这里。
+
+### 第 2 步：配置 Repository Variables
+
+同页面切到 `Variables` 标签：
+
+| Variable | 值 | 说明 |
+|---|---|---|
+| `WORKER_URL` | `https://novel-shop-api.<账号>.workers.dev` | 注入前端 `config.js` 的 `API_BASE`；首次可留空 |
+| `FRONTEND_URL` | `https://vault-shop.pages.dev` | 支付后跳回前端用；首次可留空 |
+| `PAGES_PROJECT` | `vault-shop` | Pages 项目名，留空则默认 `vault-shop` |
+
+### 第 3 步：触发部署
+
+1. 任意改动 push 到 `main`，或在 Actions 页点 `Run workflow`。
+2. 工作流先检查凭证：3 个必填 Secret 缺任一个 → 本次**跳过**（绿勾 + Summary 列出缺项），不会失败。
+3. 凭证齐全 → 自动建表（幂等）→ 写 secrets → 部署 Worker → 部署 Pages。
+4. 到 Actions 运行页 **Summary** 查看 Worker / Pages 地址。
+
+### 第 4 步：回填域名（首次部署后做一次）
+
+1. 拿到 Worker 域名 → 填入 Variable `WORKER_URL`。
+2. 拿到 Pages 域名 → 填入 Variable `FRONTEND_URL`。
+3. 再 push 一次（或点 Run workflow）——此时前端 `config.js` 带上正确 API 地址，支付后也能跳回前端。
+
+> 自定义域名：在 Pages / Worker 项目 `设置 → 自定义域` 绑定自己的域名，再把该域名填进 `WORKER_URL` / `FRONTEND_URL`。
+
+## 三、手动部署（备选 · 不依赖 GitHub Actions）
+
+本地命令行部署：
 
 ```bash
+npm install -g wrangler && npx wrangler login
 cd worker
-# 1. 编辑 wrangler.toml，填入 D1 database_id 和 KV id
-
-# 2. 建表（本地）
-npx wrangler d1 execute novel-shop-db --local --file=../db/schema.sql
-# 3. 建表（线上）
+# 1. 编辑 wrangler.toml，填入 D1 database_id
+# 2. 建表
 npx wrangler d1 execute novel-shop-db --remote --file=../db/schema.sql
-
-# 4. 设置敏感密钥（逐个执行，按提示输入）
-npx wrangler secret put EPAY_PID          # 易支付商户 PID
-npx wrangler secret put EPAY_KEY          # 易支付商户密钥
-npx wrangler secret put EPAY_API_URL      # 支付网关，如 https://ezfpy.cn/api.php
-npx wrangler secret put ADMIN_PASSWORD    # 后台管理密码
-npx wrangler secret put RESEND_API_KEY    # 邮件发货（可选，不配则跳过邮件）
-npx wrangler secret put MAIL_FROM         # 发件人（Resend 需已验证域名，可选）
-
-# 5. 部署
+# 3. 设置敏感密钥（按提示输入）
+npx wrangler secret put EPAY_PID
+npx wrangler secret put EPAY_KEY
+npx wrangler secret put EPAY_API_URL
+npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put RESEND_API_KEY   # 可选
+npx wrangler secret put MAIL_FROM        # 可选
+# 4. 部署 Worker
 npx wrangler deploy
+# 5. 部署 Pages（先在 frontend/assets/config.js 填 Worker 域名）
+npx wrangler pages deploy ../frontend --project-name=vault-shop --commit-dirty=true
 ```
-部署完成后记录 Worker 域名，如 `https://novel-shop-api.<你的账号>.workers.dev`。
+ Worker 域名形如 `https://novel-shop-api.<账号>.workers.dev`，Pages 域名形如 `https://vault-shop.pages.dev`。
 
-## 三、部署前端 Pages（对接 GitHub）
-
-1. 把整个项目 push 到 GitHub 仓库。
-2. Cloudflare Dashboard → `Workers 和 Pages → Pages → 创建 → 连接到 Git`。
-3. 选择仓库，构建配置：
-   - **构建命令**：留空（纯静态）
-   - **构建输出目录**：`frontend`
-   - **根目录**：留空
-4. 部署前，编辑 `frontend/assets/config.js`，把 `window.API_BASE` 改成第二步的 Worker 域名（前后端同域时才留空）。
-5. 回到 Worker：在 `wrangler.toml` 设置 `FRONTEND_URL` 为前端域名，重新 `npx wrangler deploy`（让支付后跳回前端）。
-6. 保存并部署。得到前端域名，如 `https://novel-shop.pages.dev`。
-
-> 也可以在 Pages 项目 `设置 → 自定义域` 绑定你自己的域名。
+> Pages 也可走原生 Git 集成：Dashboard → `Pages → 创建 → 连接到 Git`，构建命令留空、输出目录 `frontend`（此方式只自动部署前端，Worker 仍需手动/CI 部署）。
 
 ## 四、配置易支付回调
 
