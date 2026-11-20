@@ -70,7 +70,19 @@ export async function createPayment(order, env, config) {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(params).toString(),
       });
-      data = await resp.json();
+      const raw = await resp.text();
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        // 网关返回的不是 JSON（如 CDN 的 "error code: 1016"、HTML 错误页等）
+        const snippet = String(raw).replace(/\s+/g, ' ').trim().slice(0, 160);
+        const dnsFail = /error code|origin dns|not found|bad gateway|nginx|cloudflare|1016/i.test(snippet);
+        throw new Error(
+          dnsFail
+            ? `支付网关不可达，请检查 EPAY_API_URL 是否正确/域名是否有效（HTTP ${resp.status}）：${snippet}`
+            : `支付网关未返回有效 JSON（HTTP ${resp.status}）：${snippet}`
+        );
+      }
     } catch (e) {
       throw new Error(`易支付网关请求失败：${e.message || e}`);
     }
