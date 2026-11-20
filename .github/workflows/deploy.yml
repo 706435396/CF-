@@ -153,10 +153,17 @@ jobs:
           PAGES_PROJECT: ${{ vars.PAGES_PROJECT }}
         run: |
           PROJECT="${PAGES_PROJECT:-vault-shop}"
+          # 不指定 --branch：默认部署到生产分支（根域名 xxx.pages.dev）
+          # 若指定 --branch=main 会部署到预览环境 main.xxx.pages.dev，导致根域名 404
           wrangler pages deploy frontend \
             --project-name="$PROJECT" \
-            --branch=main \
             --commit-dirty=true 2>&1 | tee /tmp/pages.log
           echo "### ✅ Pages 已部署" >> "$GITHUB_STEP_SUMMARY"
-          grep -oE 'https://[^ ]+\.pages\.dev' /tmp/pages.log | head -1 | sed 's/^/- 地址: /' >> "$GITHUB_STEP_SUMMARY" || true
+          # 从日志抓部署地址（兼容 wrangler 新版彩色/纯文本输出）
+          URL=$(grep -aoE 'https://[a-zA-Z0-9._-]+\.pages\.dev' /tmp/pages.log | head -1 || true)
+          if [ -n "$URL" ]; then
+            echo "- 地址: $URL" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- 地址: https://${PROJECT}.pages.dev （如为 404，请在 CF Dashboard 复制实际域名）" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "- 项目名: $PROJECT" >> "$GITHUB_STEP_SUMMARY"
