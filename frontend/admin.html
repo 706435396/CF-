@@ -38,6 +38,27 @@
     </div>
 
     <div id="tab-products">
+      <div id="bulkPriceBar" style="margin-bottom:14px;border:1px solid var(--line,rgba(212,175,106,.25));border-radius:10px;padding:12px 14px">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <strong style="color:var(--gold-l,#d4af6a);font-size:13px">批量改价</strong>
+          <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" id="bpAll" onchange="bpToggleAll(this)"> 全选当前页</label>
+          <span id="bpCount" style="font-size:12px;color:var(--muted,#8b8f9a)">已选 0 个</span>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px">
+          <select id="bpMode" onchange="bpOnModeChange()" style="width:auto">
+            <option value="fixed">设为固定价</option>
+            <option value="delta">加价/降价</option>
+            <option value="ratio">按倍率(0.9=九折)</option>
+          </select>
+          <input id="bpValue" type="number" step="0.01" value="9.9" style="width:90px">
+          <span id="bpUnit" style="color:var(--muted,#8b8f9a)">元</span>
+          <button type="button" class="btn btn-sm" onclick="bpApply('ids')">应用到选中</button>
+          <select id="bpCategory" style="width:auto"><option value="">选择分类…</option></select>
+          <button type="button" class="btn btn-sm btn-ghost" onclick="bpApply('category')">应用该分类</button>
+          <button type="button" class="btn btn-sm btn-ghost" onclick="bpApply('all')">应用全部</button>
+        </div>
+        <div id="bpMsg" style="font-size:12px;margin-top:8px;color:var(--muted,#8b8f9a);white-space:pre-wrap"></div>
+      </div>
       <div id="productList">加载中…</div>
     </div>
     <div id="tab-orders" style="display:none">
@@ -139,14 +160,18 @@ function switchTab(tab, el) {
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); el.classList.add('active');
   ['products','orders','add'].forEach(t=>document.getElementById('tab-'+t).style.display = t===tab?'block':'none');
 }
+let allProducts = [];
 async function loadProducts() {
   const r = await apiAdmin('/api/admin/products').catch(()=>({}));
   if (!r.ok) { document.getElementById('productList').innerHTML = `<div class="err">${esc(r.error)}</div>`; return; }
-  if (!r.list.length) { document.getElementById('productList').innerHTML = '<div class="notice">暂无商品，请点“添加商品”或使用批量脚本导入。</div>'; return; }
+  if (!r.list.length) { allProducts = []; document.getElementById('productList').innerHTML = '<div class="notice">暂无商品，请点“添加商品”或使用批量脚本导入。</div>'; return; }
+  allProducts = r.list;
   const code = p => 'NO.' + String(p.id).padStart(5,'0');
   document.getElementById('productList').innerHTML = `<div class="notice">前台已全面脱敏：访客仅能看到档案编号（由 ID 派生）、分类与价格，书名/作者/封面/正文均不会出现在任何公开接口，付款验证通过后才揭示。</div>` +
-    `<table><thead><tr><th>档案编号</th><th>名称（仅管理员可见）</th><th>分类</th><th>价格</th><th>销量</th><th>状态</th><th>操作</th></tr></thead><tbody>` +
+    `<table><thead><tr><th style="width:28px"><input type="checkbox" id="bpHead" onchange="bpToggleAll(this)"></th><th>档案编号</th><th>名称（仅管理员可见）</th><th>分类</th><th>价格</th><th>销量</th><th>状态</th><th>操作</th></tr></thead><tbody>` +
     r.list.map(p=>`<tr>
+      <td><input type="checkbox" class="bpChk" value="${p.id}" onchange="bpUpdateCount()"></td>
+
       <td style="font-family:var(--mono);color:var(--gold-l)">${code(p)}</td>
       <td>${esc(p.title)}</td>
       <td>${esc(p.category)}</td><td>${fmtPrice(p.price)}</td><td>${p.sales||0}</td>
@@ -154,6 +179,61 @@ async function loadProducts() {
       <td><button class="btn btn-sm" onclick="editProduct(${p.id})">编辑</button>
           <button class="btn btn-sm btn-ghost" onclick="delProduct(${p.id})">删</button></td>
     </tr>`).join('') + '</tbody></table>';
+  // 填充分类下拉
+  const cats = [...new Set(r.list.map(p => p.category).filter(Boolean))];
+  const sel = document.getElementById('bpCategory');
+  sel.innerHTML = '<option value="">选择分类…</option>' + cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  bpUpdateCount();
+}
+function bpSelectedIds() {
+  return Array.from(document.querySelectorAll('.bpChk:checked')).map(c => Number(c.value));
+}
+function bpUpdateCount() {
+  const n = bpSelectedIds().length;
+  const el = document.getElementById('bpCount');
+  if (el) el.textContent = `已选 ${n} 个`;
+  const all = document.querySelectorAll('.bpChk');
+  const allChecked = all.length > 0 && n === all.length;
+  const head = document.getElementById('bpHead');
+  const bar = document.getElementById('bpAll');
+  if (head) head.checked = allChecked;
+  if (bar) bar.checked = allChecked;
+}
+function bpToggleAll(trigger) {
+  const checked = trigger ? trigger.checked : true;
+  document.querySelectorAll('.bpChk').forEach(c => { c.checked = checked; });
+  bpUpdateCount();
+}
+function bpOnModeChange() {
+  const m = document.getElementById('bpMode').value;
+  document.getElementById('bpUnit').textContent = m === 'ratio' ? '倍' : '元';
+  if (m === 'ratio') { document.getElementById('bpValue').value = '0.9'; }
+  else if (document.getElementById('bpValue').value === '0.9') { document.getElementById('bpValue').value = '9.9'; }
+}
+async function bpApply(scope) {
+  const mode = document.getElementById('bpMode').value;
+  const value = parseFloat(document.getElementById('bpValue').value);
+  const msg = document.getElementById('bpMsg');
+  if (!Number.isFinite(value)) { msg.textContent = '请输入有效数值'; return; }
+  if (mode === 'ratio' && (value <= 0 || value > 100)) { msg.textContent = '倍率需在 0~100 之间'; return; }
+  if (mode === 'fixed' && value < 0) { msg.textContent = '价格不能为负'; return; }
+  if (scope === 'ids' && bpSelectedIds().length === 0) { msg.textContent = '请先勾选商品'; return; }
+  if (scope === 'category' && !document.getElementById('bpCategory').value) { msg.textContent = '请先选择分类'; return; }
+
+  const body = { mode, value, scope };
+  if (scope === 'ids') body.ids = bpSelectedIds();
+  if (scope === 'category') body.category = document.getElementById('bpCategory').value;
+
+  const scopeText = scope === 'ids' ? `选中 ${body.ids.length} 个` : scope === 'category' ? `分类「${body.category}」` : '全部商品';
+  const modeText = mode === 'fixed' ? `设为 ${value} 元` : mode === 'delta' ? `${value>=0?'+':''}${value} 元` : `×${value} 倍`;
+  if (!confirm(`确认对【${scopeText}】执行【${modeText}】？此操作不可撤销。`)) return;
+
+  msg.textContent = '处理中…';
+  const r = await apiAdmin('/api/admin/batch-price', { method:'PUT', body: JSON.stringify(body) }).catch(()=>({}));
+  if (!r.ok) { msg.textContent = '失败：' + (r.error || '请求错误'); return; }
+  msg.textContent = `✓ 成功改价 ${r.changed} 个商品。`;
+  await loadProducts();
+  loadStats();
 }
 async function loadOrders() {
   const r = await apiAdmin('/api/admin/orders').catch(()=>({}));

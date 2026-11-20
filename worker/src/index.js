@@ -418,6 +418,54 @@ async function adminRoutes(request, env, path, method) {
     return json({ ok: true, products: p.c, orders: o.c, paid: paid.c, revenue: paid.s, pending: pending.c });
   }
 
+  // 商品批量改价（一次请求改多条，支持 固定/增减/倍率 × 选中/分类/全部）
+  if (resource === 'batch-price' && method === 'PUT') {
+    const b = await request.json().catch(() => ({}));
+    const mode = b.mode;                       // fixed | delta | ratio
+    const value = Number(b.value);             // fixed=目标价(元), delta=增减(元), ratio=倍率(如0.9)
+    const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter(Number.isFinite) : [];
+    const category = typeof b.category === 'string' ? b.category.trim() : '';
+    const scope = b.scope;                     // ids | category | all
+
+    if (!['fixed','delta','ratio'].includes(mode)) return json({ ok:false, error:'改价方式无效' }, 400);
+    if (!Number.isFinite(value)) return json({ ok:false, error:'数值无效' }, 400);
+    if (mode === 'fixed' && value < 0) return json({ ok:false, error:'价格不能为负' }, 400);
+    if (mode === 'ratio' && (value <= 0 || value > 100)) return json({ ok:false, error:'倍率需在 0~100 之间' }, 400);
+
+    // 先查目标商品（D1 IN 参数上限约 100，超出分批）
+    let targets = [];
+    if (scope === 'ids') {
+      if (!ids.length) return json({ ok:false, error:'未选中商品' }, 400);
+      for (let i = 0; i < ids.length; i += 90) {
+        const chunk = ids.slice(i, i + 90);
+        const ph = chunk.map(() => '?').join(',');
+        const { results } = await env.DB.prepare(`SELECT id,price FROM products WHERE id IN (${ph})`).bind(...chunk).all();
+        targets.push(...results);
+      }
+    } else if (scope === 'category') {
+      if (!category) return json({ ok:false, error:'分类不能为空' }, 400);
+      const { results } = await env.DB.prepare('SELECT id,price FROM products WHERE category=?').bind(category).all();
+      targets = results;
+    } else if (scope === 'all') {
+      const { results } = await env.DB.prepare('SELECT id,price FROM products').all();
+      targets = results;
+    } else {
+      return json({ ok:false, error:'范围无效' }, 400);
+    }
+    if (!targets.length) return json({ ok:true, changed:0, message:'没有匹配的商品' });
+
+    // 计算新价（分），批量更新
+    const ops = targets.map(p => {
+      let cents;
+      if (mode === 'fixed') cents = Math.round(value * 100);
+      else if (mode === 'delta') cents = Math.max(0, Math.round(Number(p.price || 0) + value * 100));
+      else cents = Math.max(0, Math.round(Number(p.price || 0) * value));
+      return env.DB.prepare('UPDATE products SET price=?, updated_at=? WHERE id=?').bind(cents, now(), p.id);
+    });
+    await env.DB.batch(ops);
+    return json({ ok:true, changed:ops.length, sample: targets.slice(0,3).map(p => ({ id:p.id, old:p.price })) });
+  }
+
   // 商品管理（完整字段）
   if (resource === 'products') {
     if (method === 'GET' && !id) {
