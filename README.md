@@ -45,7 +45,8 @@ CR自动发货/
 ├─ frontend/                  Pages 前端静态站
 │  ├─ index.html / book.html / order.html / read.html / admin.html
 │  └─ assets/
-└─ scripts/bulk_import.py     批量入库脚本
+├─ scripts/bulk_import.py        批量入库脚本（正文进 D1）
+└─ scripts/bulk_upload_r2.py     批量上传 R2 + 自动建商品脚本
 ```
 
 ---
@@ -188,8 +189,8 @@ python bulk_import.py --api https://novel-shop-api.<账号>.workers.dev \
 
 R2 桶 `cr-commodity` 已通过 `wrangler.toml` 的 `[[r2_buckets]]` 绑定为 `FILES`。在 `admin.html` 的“添加商品”里可直接选文件上传：
 
-1. 打开 `/admin.html` → 添加商品 → 「上传文件到 R2」选文件（txt/md/epub/pdf，≤100MB）→ 点「上传到 R2」。
-2. 上传成功后**随机 key 自动填入**「R2 文件 key」（形如 `files/a1b2c3....txt`，不可猜、不含中文）。
+1. 打开 `/admin.html` → 添加商品 → 「上传文件到 R2」选文件（**可按 Ctrl/Shift 多选批量上传**，txt/md/epub/pdf，单个≤100MB）→ 点「批量上传到 R2」。
+2. 上传成功后**随机 key 自动填入**「R2 文件 key」（形如 `files/a1b2c3....txt`，不可猜、不含中文）。多选时逐个上传，消息区列出每个文件对应的 key（每个文件需分别建一个商品、填入对应 key）。
 3. 填书名/价格 → 保存商品。买家付款后即拿到带令牌的下载链接。
 
 底层是 `POST /api/admin/upload`（后台登录 token 鉴权），用随机串生成 key 写入 R2。也可用命令行直传：
@@ -200,6 +201,29 @@ npx wrangler r2 object put cr-commodity/files/自定义.txt --file=./本地.txt
 **下载鉴权（重要）**：`/api/file/:key` 不再公开。下载链接形如 `/api/file/files/xxx.txt?token=<32位令牌>`，令牌在**付款时一单一码生成**，且服务端校验「令牌属于已支付订单 + 该订单商品确实绑定这个 key」，双重防越权。无令牌/未支付/文件不匹配一律 403。因此：
 - 桶**不要**开启 `r2.dev` 公有域名，所有访问走 Worker 鉴权接口；
 - 别把带 token 的链接到处转发（等同一次性凭证，虽未设过期但绑定订单）。
+
+### 方式 D：批量上传文件到 R2 + 自动建商品（大批量推荐）
+
+文件多（几十~上千本）时用脚本，扫文件夹 → 逐个传 R2 → 自动建商品绑定 key，一步到位：
+```bash
+cd scripts
+python bulk_upload_r2.py --api https://novel-shop-api.<账号>.workers.dev \
+  --password 你的后台密码 --dir ./我的小说 \
+  --price 9.9 --category 都市 --author 佚名
+```
+- 支持 txt/md/epub/pdf，递归子文件夹；随机 key（不可猜、无中文）；书名取文件名、价格自动转分、正文留空靠带令牌链接发货（txt/md 可在线阅读）。
+- `--dry-run` 先看将处理哪些文件、`--limit 5` 先小批试跑、`--delay 0.3` 控制间隔、`--status off` 建为下架待检查。
+- slug 自动去重（重名加 `-2`），已存在的商品会跳过重名，便于中断后续跑。
+- 与方式 B 区别：B 把正文读进 D1 数据库，D 把文件存 R2（适合大文件/任意格式）。
+
+**三种导入方式对比**：
+
+| 方式 | 批量 | 正文/文件存哪 | 适用场景 |
+|---|---|---|---|
+| A 后台逐个 | ❌ | D1 正文 或 R2 | 临时加一两本 |
+| B `bulk_import.py` | ✅ | D1 正文 / 网盘链接 | 短篇、要在线阅读 |
+| C 网页多选上传 | ✅(传文件) | R2 | 几十本内、可视化操作 |
+| D `bulk_upload_r2.py` | ✅(传文件+建商品) | R2 | 大批量、任意格式/大文件 |
 
 **存储压缩说明**：正文（`content` 字段）当前为明文存储，HTTP 传输由 Cloudflare 自动 gzip/Brotli 压缩；数据库内的存储压缩（如 gzip 后 base64）尚未实现。大文件建议走 R2/网盘而非塞进 `content`。
 
