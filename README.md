@@ -147,7 +147,8 @@ Worker 域名形如 `https://novel-shop-api.<账号>.workers.dev`。前端 Pages
 
 ### 1. 商户后台设置
 - **签名方式**：选 **MD5**（即兼容模式 / V1 MD5，不要选「仅 RSA」）。
-- **接口地址（API 提交地址）**：填 V1 的 `mapi.php` 完整地址，如 `https://epay.weixlf.com/mapi.php` —— 这是服务端 POST 调用、返回 JSON 的接口。
+- **接口地址（API 提交地址）**：填 V1 的 `mapi.php` 完整地址，如 `https://epay.weixii.com/mapi.php` —— 这是服务端 POST 调用、返回 JSON 的接口。
+  - 旧地址 `epay.weixlf.com` 域名已失效（2026-11 起公网 DNS 无解析，返回 1016），已迁移至 `epay.weixii.com`。
   - 代码会自动识别：URL 含 `mapi.php` → 走 POST+JSON 模式；否则按旧版 `submit.php` 的 GET 跳转处理。**推荐用 mapi.php**。
 - 回调地址无需在后台手填：下单时代码会自动把 `notify_url` / `return_url` 传给平台。它们指向：
   ```
@@ -160,7 +161,7 @@ Worker 域名形如 `https://novel-shop-api.<账号>.workers.dev`。前端 Pages
 |---|---|---|
 | `EPAY_PID` | 商户 ID（如 `86957`） | 后台「商户ID」 |
 | `EPAY_KEY` | V1 的 MD5 密钥（32 位） | 后台「MD5密钥」，**不是 RSA 密钥** |
-| `EPAY_API_URL` | `https://epay.weixlf.com/mapi.php` | V1 接口地址，以文档「URL地址」为准 |
+| `EPAY_API_URL` | `https://epay.weixii.com/mapi.php` | V1 接口地址，以平台后台「URL地址」为准（旧 weixlf.com 已失效） |
 
 ### 3. 协议适配说明（代码已实现，符合 V1 官方文档）
 - 提交参数含官方必填的 `pid` / `type` / `out_trade_no` / `notify_url` / `name` / `money` / `clientip` / `sign` / `sign_type`。
