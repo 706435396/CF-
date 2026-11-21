@@ -76,29 +76,6 @@ async function route(request, env, ctx) {
 
   if (method === 'OPTIONS') return json({ ok: true });
 
-  // ---------- 临时：网关出口IP探测（验证后删除）----------
-  if (path === '/api/__probe_gateways' && method === 'GET') {
-    const hosts = ['www.ezfpy.cn', 'pay.wewl.net', 'pay.phpwc.com', 'pay.imataoke.com', 'api.kuaixiaopu.com', 'epay.weixii.com'];
-    const results = await Promise.all(hosts.map(async (host) => {
-      try {
-        const resp = await fetch(`https://${host}/mapi.php`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36' },
-          body: new URLSearchParams({ pid: '1001', type: 'alipay', out_trade_no: 'PROBE' + Date.now(), name: 'test', money: '1.00', sign: 'bad', sign_type: 'MD5' }).toString(),
-        });
-        const text = await resp.text();
-        let kind = 'other';
-        if (/^\s*\{/.test(text)) kind = 'JSON(网关放行)';
-        else if (/location\.href|<script|challenge/i.test(text)) kind = 'WAF挑战(拦截)';
-        else if (/error code|origin dns/i.test(text)) kind = 'DNS/边缘错误';
-        return { host, http: resp.status, kind, body: text.replace(/\s+/g, ' ').trim().slice(0, 80) };
-      } catch (e) {
-        return { host, http: 0, kind: '请求失败', body: (e.message || '').slice(0, 80) };
-      }
-    }));
-    return json({ ok: true, from: 'worker-egress', results });
-  }
-
   // ---------- 公开接口（全部脱敏） ----------
   if (path === '/api/products' && method === 'GET') return listProducts(url, env);
   if (path.startsWith('/api/products/') && method === 'GET') {
