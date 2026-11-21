@@ -40,10 +40,18 @@ function isMapiMode(apiUrl) {
   return /mapi\.php/i.test(apiUrl || '');
 }
 
+// 容错：根地址自动补全 mapi.php，避免用户只填域名时误走旧版 GET 跳转模式
+function normalizeApiUrl(apiUrl) {
+  const raw = String(apiUrl || '').trim().replace(/\/+$/, '');
+  if (!raw) return raw;
+  if (/\.php$/i.test(raw)) return raw; // 已明确指定 php 接口则不改写
+  return `${raw}/mapi.php`;
+}
+
 export async function createPayment(order, env, config) {
   const pid = config.pid || env.EPAY_PID;
   const key = config.key || env.EPAY_KEY;
-  const apiUrl = config.apiUrl || env.EPAY_API_URL;
+  const apiUrl = normalizeApiUrl(config.apiUrl || env.EPAY_API_URL);
   if (!pid || !key || !apiUrl) throw new Error('易支付配置缺失：请设置 EPAY_PID / EPAY_KEY / EPAY_API_URL');
 
   const origin = (config.notifyBase || '').replace(/\/$/, '');
