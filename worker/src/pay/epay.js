@@ -72,23 +72,51 @@ export async function createPayment(order, env, config) {
   // ---- 模式 A：mapi.php 服务端 POST，返回 JSON ----
   if (isMapiMode(apiUrl)) {
     let data;
+    const postBody = new URLSearchParams(params).toString();
+    const post = (cookie) => fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      body: postBody,
+    });
     try {
-      const resp = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(params).toString(),
-      });
-      const raw = await resp.text();
+      let resp = await post();
+      let raw = await resp.text();
+      // 部分网关 WAF 对 CF 出口 IP 首次返回 JS 挑战页（403/200 + location.href 跳转 + Set-Cookie）
+      // 带首次响应种下的 Cookie 重试一次，模拟浏览器二次访问
+      if (/location\.href|<script/i.test(raw) && raw.length < 2000) {
+        const setCookie = resp.headers.get('set-cookie');
+        if (setCookie) {
+          const cookie = setCookie.split(';').map((c) => c.trim().split('=')[0] + '=' + (c.trim().split('=')[1] || '')).join('; ');
+          const retry = await post(cookie);
+          // 重试后若仍为挑战页但拿到新 cookie（滑块/多次挑战），再试一次
+          const retryRaw = await retry.text();
+          if (/location\.href|<script/i.test(retryRaw) && retryRaw.length < 2000) {
+            const c2 = retry.headers.get('set-cookie');
+            if (c2) {
+              const cookie2 = c2.split(';').map((c) => c.trim().split('=')[0] + '=' + (c.trim().split('=')[1] || '')).join('; ');
+              const retry2 = await post(cookie2);
+              resp = retry2; raw = await retry2.text();
+            } else { resp = retry; raw = retryRaw; }
+          } else { resp = retry; raw = retryRaw; }
+        }
+      }
       try {
         data = JSON.parse(raw);
       } catch {
         // 网关返回的不是 JSON（如 CDN 的 "error code: 1016"、HTML 错误页等）
         const snippet = String(raw).replace(/\s+/g, ' ').trim().slice(0, 160);
+        const waf = /location\.href|<script|challenge|验证/i.test(snippet);
         const dnsFail = /error code|origin dns|not found|bad gateway|nginx|cloudflare|1016/i.test(snippet);
         throw new Error(
-          dnsFail
-            ? `支付网关不可达，请检查 EPAY_API_URL 是否正确/域名是否有效（HTTP ${resp.status}）：${snippet}`
-            : `支付网关未返回有效 JSON（HTTP ${resp.status}）：${snippet}`
+          waf
+            ? `支付网关 WAF 拦截了服务器出口 IP（HTTP ${resp.status}），需联系平台加白或换网关：${snippet}`
+            : dnsFail
+              ? `支付网关不可达，请检查 EPAY_API_URL 是否正确/域名是否有效（HTTP ${resp.status}）：${snippet}`
+              : `支付网关未返回有效 JSON（HTTP ${resp.status}）：${snippet}`
         );
       }
     } catch (e) {
